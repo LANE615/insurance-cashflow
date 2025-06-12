@@ -1,0 +1,148 @@
+
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>階梯式佣金現金流模擬工具</title>
+    <style>
+        body { font-family: Arial,sans-serif; padding: 24px;}
+        input[type="number"] { width: 130px; padding: 4px; }
+        th, td { border: 1px solid #ccc; padding: 5px; text-align: right; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px;}
+        th { background:#f2f2f2;}
+        td.left { text-align:left; }
+        .btn { padding:8px 18px;font-size:16px;margin:8px 8px 12px 0; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+<h2>階梯式佣金現金流模擬工具</h2>
+<div>
+    <p>請依序輸入每年總保費：</p>
+    <div id="inputs"></div>
+    <button class="btn" onclick="calculate()">計算階梯現金流</button>
+    <button class="btn" onclick="exportExcel()">匯出Excel</button>
+</div>
+<div style="margin-top:24px;">
+    <table id="resultTable">
+        <thead>
+        <tr>
+            <th>年度</th>
+            <th>保單類型</th>
+            <th>首年佣金</th>
+            <th>年終獎金</th>
+            <th>續期佣金</th>
+            <th>服務津貼</th>
+            <th>13個月續保獎金</th>
+            <th>25個月續保獎金</th>
+            <th>合計</th>
+        </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+</div>
+<script>
+const rules = {
+    long:   { portion: 0.15, fy: 0.80, bonus: 0.10, renewal: [0.02, 4], service: [0.015, 20], p13: 0.10, p25: 0.07 },
+    mid:    { portion: 0.05, fy: 0.60, bonus: 0.10, renewal: [0.01, 3], service: [0.01, 10],   p13: 0.07, p25: 0.049 },
+    short:  { portion: 0.20, fy: 0.50, bonus: 0.10, renewal: [0.01, 1], service: [0.01, 4],    p13: 0.02, p25: 0.014 },
+    single: { portion: 0.60, fy: 0.06, bonus: 0.00, renewal: [0.00, 0], service: [0.00, 0],    p13: 0.00, p25: 0.00 }
+};
+const typeName = {long:"長年期", mid:"中年期", short:"短年期", single:"躉繳"};
+const startYear = 2024, years = 20;
+
+function format(n) {
+    return n ? n.toLocaleString("zh-Hant-TW", { maximumFractionDigits: 0 }) : "";
+}
+function buildInputs() {
+    let html = "";
+    for(let i=0; i<years; i++) {
+        let y = startYear+i;
+        html += `${y}年：<input type="number" id="premium_${y}" value=""><br>`;
+    }
+    document.getElementById("inputs").innerHTML = html;
+}
+let tableData = [];
+function calculate() {
+    tableData = [];
+    let premiumByYear = [];
+    for(let i=0; i<years; i++) {
+        let y = startYear+i;
+        premiumByYear[y] = parseFloat(document.getElementById("premium_"+y).value) || 0;
+    }
+    let contract = {}; // contract[來源年][類型]
+    for(let y=startYear; y<startYear+years; y++) {
+        contract[y] = {};
+        for(let t in rules) {
+            let subPremium = premiumByYear[y]*rules[t].portion;
+            let fy = subPremium * rules[t].fy;
+            let bonus = fy * rules[t].bonus;
+            let renews = Array(20).fill(0);
+            for(let i=0; i<rules[t].renewal[1]; i++) renews[i]=subPremium*rules[t].renewal[0];
+            let services = Array(20).fill(0);
+            for(let i=0; i<rules[t].service[1]; i++) services[i]=subPremium*rules[t].service[0];
+            contract[y][t] = {
+                首年佣金: fy,
+                年終獎金: bonus,
+                續期佣金明細: renews,
+                服務津貼明細: services,
+                '13個月續保獎金': subPremium*rules[t].p13,
+                '25個月續保獎金': subPremium*rules[t].p25
+            }
+        }
+    }
+    // rolling現金流表
+    let tbody = "";
+    for(let y=startYear; y<startYear+years; y++) {
+        for(let t in rules) {
+            let first = contract[y][t].首年佣金;
+            let bonus = contract[y][t].年終獎金;
+            let renewal = 0, service = 0;
+            for(let past=1; past<=20; past++) {
+                let srcYear = y-past;
+                if(srcYear<startYear) break;
+                renewal += contract[srcYear][t].續期佣金明細[past-1];
+                service += contract[srcYear][t].服務津貼明細[past-1];
+            }
+            let p13 = (contract[y-1] && contract[y-1][t]) ? contract[y-1][t]['13個月續保獎金'] : 0;
+            let p25 = (contract[y-2] && contract[y-2][t]) ? contract[y-2][t]['25個月續保獎金'] : 0;
+            let total = first+bonus+renewal+service+p13+p25;
+            tbody += `<tr>
+                <td class="left">${y}</td>
+                <td class="left">${typeName[t]}</td>
+                <td>${format(first)}</td>
+                <td>${format(bonus)}</td>
+                <td>${format(renewal)}</td>
+                <td>${format(service)}</td>
+                <td>${format(p13)}</td>
+                <td>${format(p25)}</td>
+                <td>${format(total)}</td>
+            </tr>`;
+            tableData.push({
+                '年度': y,
+                '保單類型': typeName[t],
+                '首年佣金': first,
+                '年終獎金': bonus,
+                '續期佣金': renewal,
+                '服務津貼': service,
+                '13個月續保獎金': p13,
+                '25個月續保獎金': p25,
+                '合計': total
+            });
+        }
+    }
+    document.querySelector("#resultTable tbody").innerHTML = tbody;
+}
+
+function exportExcel() {
+    if(!tableData.length) { alert("請先計算再匯出Excel"); return;}
+    let ws = XLSX.utils.json_to_sheet(tableData);
+    let wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "階梯式佣金現金流");
+    XLSX.writeFile(wb, "階梯式佣金現金流明細.xlsx");
+}
+
+window.onload = buildInputs;
+</script>
+</body>
+</html>
